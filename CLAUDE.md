@@ -22,8 +22,31 @@ flashforge/
     └── sample-outputs/         # Example STL outputs
 ```
 
+## Development Setup (uv)
+
+This project uses `uv` for dependency and virtual environment management.
+
+```bash
+# Install dependencies and create venv
+uv sync
+
+# Run Python scripts with dependencies
+uv run python flashforge/scripts/utils.py
+
+# Run MCP servers
+uv run flashforge-printer-mcp
+uv run flashforge-convert-mcp
+uv run flashforge-generate-mcp
+
+# Add a new dependency
+uv add <package-name>
+```
+
+**Important:** Always use `uv run` to execute Python scripts to ensure the correct virtual environment and dependencies are used.
+
 ## Python Dependencies
 
+Managed via `pyproject.toml`:
 ```
 numpy
 numpy-stl
@@ -32,6 +55,9 @@ opencv-python
 trimesh
 shapely
 svgpathtools
+mcp
+requests
+mapbox-earcut
 ```
 
 ## Conversion Methods

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "flashforge-printer": {
+      "command": "/Users/anthony/.local/bin/uv",
+      "args": ["run", "--directory", "/Users/anthony/workspace/flashforge-claude-skill", "python", "-m", "flashforge_printer_mcp"],
+      "cwd": "/Users/anthony/workspace/flashforge-claude-skill"
+    },
+    "flashforge-convert": {
+      "command": "/Users/anthony/.local/bin/uv",
+      "args": ["run", "--directory", "/Users/anthony/workspace/flashforge-claude-skill", "python", "-m", "flashforge_convert_mcp"],
+      "cwd": "/Users/anthony/workspace/flashforge-claude-skill"
+    }
+  }
+}

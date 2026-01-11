@@ -14,6 +14,10 @@ wheels/
 
 # Generated output files
 output/
+input/
+*.stl
+*.glb
+*.obj
 
 # Environment/secrets
 .env
