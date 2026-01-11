@@ -9,9 +9,12 @@ Tools:
 - get_printer_status: Get temperatures, progress, and state
 - send_gcode_file: Upload G-code file with optional auto-start
 - get_camera_url: Get camera stream URL for monitoring
+- watch_printer: Combined status check with camera option for active prints
 """
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 from mcp.server import Server
 from mcp.types import Tool, TextContent, Resource
@@ -135,6 +138,35 @@ The URL format is: http://<ip>:8080/?action=stream""",
                 },
                 "required": ["ip"]
             }
+        ),
+        Tool(
+            name="watch_printer",
+            description="""Smart printer dashboard - discover, check status, and watch active prints.
+
+This is the recommended way to check on your printer. It:
+1. Discovers printers on the network (or uses specified IP)
+2. Shows detailed status including temperatures and print progress
+3. If printing, offers to open the camera feed in your browser
+
+Perfect for: "How's my print going?" or "Check on my printer"
+
+Example: "Watch my printer" or "How's the print at 192.168.1.100 doing?"
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ip": {
+                        "type": "string",
+                        "description": "Printer IP address (optional - will auto-discover if not provided)"
+                    },
+                    "open_camera": {
+                        "type": "boolean",
+                        "description": "Automatically open camera feed in browser if printer is actively printing (default: false)",
+                        "default": False
+                    }
+                },
+                "required": []
+            }
         )
     ]
 
@@ -253,6 +285,117 @@ async def call_tool(name: str, arguments: dict):
             text=f"**Camera Stream URL**\n\n{url}\n\nOpen in a browser or video player (like VLC) to view the live feed."
         )]
 
+    elif name == "watch_printer":
+        ip = arguments.get("ip")
+        open_camera = arguments.get("open_camera", False)
+
+        try:
+            # Step 1: Find printer if IP not provided
+            if not ip:
+                printers = protocol.discover_printers(timeout=5.0)
+                if not printers:
+                    return [TextContent(
+                        type="text",
+                        text="**No printers found on the network.**\n\n"
+                             "Make sure your printer is on and connected to the same network."
+                    )]
+                if len(printers) > 1:
+                    result = f"**Found {len(printers)} printers** - specify which one to watch:\n\n"
+                    for p in printers:
+                        result += f"- **{p.name}** at `{p.ip}`\n"
+                    result += "\nUse: watch_printer with ip='...' to select one."
+                    return [TextContent(type="text", text=result)]
+                ip = printers[0].ip
+                printer_name = printers[0].name
+            else:
+                printer_name = ip
+
+            # Step 2: Get printer info and status
+            info = {}
+            try:
+                info = protocol.get_printer_info(ip)
+            except:
+                pass
+
+            status = protocol.get_printer_status(ip)
+            camera_url = protocol.get_camera_url(ip)
+
+            # Step 3: Build response
+            state = status.get('state', 'unknown').upper()
+            is_printing = state == 'PRINTING'
+
+            result = f"# 🖨️ {info.get('name', printer_name)}\n\n"
+
+            if info.get('model'):
+                result += f"**Model:** {info['model']}\n"
+            result += f"**IP:** {ip}\n"
+            result += f"**Status:** "
+
+            if is_printing:
+                progress = status.get('progress', 0)
+                result += f"🟢 **PRINTING** ({progress:.1f}% complete)\n\n"
+
+                # Progress bar
+                bar_length = 20
+                filled = int(bar_length * progress / 100)
+                bar = "█" * filled + "░" * (bar_length - filled)
+                result += f"```\n[{bar}] {progress:.1f}%\n```\n\n"
+            elif state == 'IDLE':
+                result += "⚪ **IDLE** (ready to print)\n\n"
+            elif state == 'PAUSED':
+                result += "🟡 **PAUSED**\n\n"
+            else:
+                result += f"⚫ **{state}**\n\n"
+
+            # Temperatures
+            result += "## Temperatures\n\n"
+            if 'nozzle_temp' in status:
+                nozzle = status['nozzle_temp']
+                target = status.get('nozzle_target', 0)
+                if target > 0:
+                    result += f"- **Nozzle:** {nozzle:.0f}°C → {target:.0f}°C\n"
+                else:
+                    result += f"- **Nozzle:** {nozzle:.0f}°C\n"
+
+            if 'bed_temp' in status:
+                bed = status['bed_temp']
+                target = status.get('bed_target', 0)
+                if target > 0:
+                    result += f"- **Bed:** {bed:.0f}°C → {target:.0f}°C\n"
+                else:
+                    result += f"- **Bed:** {bed:.0f}°C\n"
+
+            result += "\n"
+
+            # Camera section
+            result += "## 📹 Camera\n\n"
+            result += f"**Stream URL:** {camera_url}\n\n"
+
+            if is_printing:
+                result += "💡 **Tip:** Open the camera URL in your browser or VLC to watch your print!\n"
+
+                # Open camera if requested
+                if open_camera:
+                    try:
+                        if sys.platform == 'darwin':
+                            subprocess.Popen(['open', camera_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            result += "\n✅ **Camera opened in your default browser!**\n"
+                        elif sys.platform == 'linux':
+                            subprocess.Popen(['xdg-open', camera_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            result += "\n✅ **Camera opened in your default browser!**\n"
+                        elif sys.platform == 'win32':
+                            subprocess.Popen(['start', camera_url], shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            result += "\n✅ **Camera opened in your default browser!**\n"
+                    except Exception as e:
+                        result += f"\n⚠️ Could not open browser: {e}\n"
+            else:
+                result += "Camera available for monitoring when you start a print.\n"
+
+            return [TextContent(type="text", text=result)]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"**Error watching printer:** {e}")]
+
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -291,6 +434,7 @@ async def read_resource(uri: str):
 
 | Tool | Description |
 |------|-------------|
+| **watch_printer** | Smart dashboard - status + camera (recommended!) |
 | discover_printers | Find printers on network |
 | get_printer_info | Get model and firmware info |
 | get_printer_status | Check temperatures and progress |

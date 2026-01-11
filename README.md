@@ -6,7 +6,7 @@ MCP (Model Context Protocol) servers for 3D printing with FlashForge printers. C
 
 | Server | Purpose | Tools |
 |--------|---------|-------|
-| **flashforge-printer** | Printer discovery & control | 5 tools |
+| **flashforge-printer** | Printer discovery & control | 6 tools |
 | **flashforge-convert** | 2D to 3D conversion | 5 tools |
 | **flashforge-generate** | AI 3D generation | 2 tools |
 
@@ -66,6 +66,7 @@ Control and monitor FlashForge 3D printers on your local network.
 
 | Tool | Description |
 |------|-------------|
+| `watch_printer` | **Smart dashboard** - auto-discover, status, and camera (recommended!) |
 | `discover_printers` | Find FlashForge printers via UDP broadcast |
 | `get_printer_info` | Get model, firmware, serial number |
 | `get_printer_status` | Check temperatures, progress, state |
@@ -74,11 +75,13 @@ Control and monitor FlashForge 3D printers on your local network.
 
 ### Example Prompts
 
+- **"Watch my printer"** - Auto-discovers and shows full dashboard with camera
+- **"How's my print going?"** - Check progress and watch the camera
 - "Find FlashForge printers on my network"
 - "What's the status of my printer at 192.168.1.100?"
 - "Upload output.gcode to my printer"
 - "Send model.gcode to my printer and start printing"
-- "Show me the camera URL for my printer"
+- "Watch my printer and open the camera" - Opens camera feed in browser
 
 ### Requirements
 
