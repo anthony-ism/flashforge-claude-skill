@@ -377,29 +377,44 @@ async def call_tool(name: str, arguments: dict):
 
             result += "\n"
 
-            # Camera section
+            # Camera section - check if actually accessible
             result += "## 📹 Camera\n\n"
-            result += f"**Stream URL:** {camera_url}\n\n"
 
-            if is_printing:
-                result += "💡 **Tip:** Open the camera URL in your browser or VLC to watch your print!\n"
+            camera_check = protocol.check_camera_available(ip)
 
-                # Open camera if requested
-                if open_camera:
-                    try:
-                        if sys.platform == 'darwin':
-                            subprocess.Popen(['open', camera_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            result += "\n✅ **Camera opened in your default browser!**\n"
-                        elif sys.platform == 'linux':
-                            subprocess.Popen(['xdg-open', camera_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            result += "\n✅ **Camera opened in your default browser!**\n"
-                        elif sys.platform == 'win32':
-                            subprocess.Popen(['start', camera_url], shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            result += "\n✅ **Camera opened in your default browser!**\n"
-                    except Exception as e:
-                        result += f"\n⚠️ Could not open browser: {e}\n"
+            if camera_check['available']:
+                result += f"**Stream URL:** {camera_url}\n\n"
+
+                if is_printing:
+                    result += "✅ Camera is online! Open the URL in your browser or VLC to watch your print.\n"
+
+                    # Open camera if requested
+                    if open_camera:
+                        try:
+                            if sys.platform == 'darwin':
+                                subprocess.Popen(['open', camera_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                result += "\n🎬 **Camera opened in your default browser!**\n"
+                            elif sys.platform == 'linux':
+                                subprocess.Popen(['xdg-open', camera_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                result += "\n🎬 **Camera opened in your default browser!**\n"
+                            elif sys.platform == 'win32':
+                                subprocess.Popen(['start', camera_url], shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                result += "\n🎬 **Camera opened in your default browser!**\n"
+                        except Exception as e:
+                            result += f"\n⚠️ Could not open browser: {e}\n"
+                else:
+                    result += "Camera is online and ready for monitoring.\n"
             else:
-                result += "Camera available for monitoring when you start a print.\n"
+                result += "❌ **Camera not accessible**\n\n"
+                result += f"Expected URL: `{camera_url}`\n\n"
+                result += "**Troubleshooting:**\n"
+                result += "1. Check if camera is enabled in printer settings (touchscreen)\n"
+                result += "2. Restart the printer\n"
+                result += "3. Verify the camera is properly connected\n"
+                result += "4. Some base 5M models don't have a camera (only 5M Pro)\n"
+
+                if camera_check.get('error'):
+                    result += f"\n*Error: {camera_check['error']}*\n"
 
             return [TextContent(type="text", text=result)]
 
