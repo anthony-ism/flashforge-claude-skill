@@ -1,9 +1,20 @@
 [project]
-name = "flashforge-claude-skill"
-version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.9"
+name = "flashforge-mcp"
+version = "0.2.0"
+description = "MCP servers for FlashForge 3D printer control and 2D-to-3D conversion"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+keywords = ["mcp", "flashforge", "3d-printing", "stl", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
+    "mcp>=1.0.0",
     "mapbox-earcut>=2.0.0",
     "numpy>=2.0.2",
     "numpy-stl>=3.1.2",
@@ -14,3 +25,14 @@ dependencies = [
     "svgpathtools>=1.7.2",
     "trimesh>=4.11.0",
 ]
+
+[project.scripts]
+flashforge-printer-mcp = "flashforge_printer_mcp:main"
+flashforge-convert-mcp = "flashforge_convert_mcp:main"
+flashforge-generate-mcp = "flashforge_generate_mcp:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
