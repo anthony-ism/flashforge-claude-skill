@@ -335,11 +335,21 @@ async def call_tool(name: str, arguments: dict):
                 progress = status.get('progress', 0)
                 result += f"🟢 **PRINTING** ({progress:.1f}% complete)\n\n"
 
+                # Show current file
+                if 'current_file' in status:
+                    result += f"**File:** `{status['current_file']}`\n\n"
+
                 # Progress bar
                 bar_length = 20
                 filled = int(bar_length * progress / 100)
                 bar = "█" * filled + "░" * (bar_length - filled)
-                result += f"```\n[{bar}] {progress:.1f}%\n```\n\n"
+                result += f"```\n[{bar}] {progress:.1f}%\n```\n"
+
+                # Layer progress
+                if 'current_layer' in status and 'total_layers' in status:
+                    result += f"**Layer:** {status['current_layer']} / {status['total_layers']}\n"
+
+                result += "\n"
             elif state == 'IDLE':
                 result += "⚪ **IDLE** (ready to print)\n\n"
             elif state == 'PAUSED':

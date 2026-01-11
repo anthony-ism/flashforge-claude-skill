@@ -205,12 +205,14 @@ def get_printer_status(ip: str, port: int = PRINTER_PORT) -> Dict:
         response = _send_command(ip, "M105", port)
         if 'T' in response:
             for part in response.split():
-                if part.startswith('T'):
+                # T0 is the main extruder nozzle
+                if part.startswith('T0:'):
                     temps = part.split(':')[1] if ':' in part else ''
                     if '/' in temps:
                         current, target = temps.split('/')
                         status['nozzle_temp'] = float(current)
                         status['nozzle_target'] = float(target)
+                # B is the bed
                 elif part.startswith('B:'):
                     temps = part.split(':')[1]
                     if '/' in temps:
@@ -220,34 +222,72 @@ def get_printer_status(ip: str, port: int = PRINTER_PORT) -> Dict:
     except:
         pass
 
+    # Get status (M119) - do this before M27 to get file name
+    try:
+        response = _send_command(ip, "M119", port)
+        response_lower = response.lower()
+
+        # Parse MachineStatus
+        if 'building_from_sd' in response_lower or 'building' in response_lower:
+            status['state'] = 'printing'
+        elif 'paused' in response_lower:
+            status['state'] = 'paused'
+        elif 'idle' in response_lower or 'ready' in response_lower:
+            status['state'] = 'idle'
+        elif 'busy' in response_lower:
+            status['state'] = 'busy'
+        else:
+            status['state'] = 'unknown'
+
+        # Parse current file name
+        for line in response.split('\n'):
+            if 'currentfile:' in line.lower():
+                filename = line.split(':', 1)[1].strip()
+                if filename:
+                    status['current_file'] = filename
+
+        # Parse move mode
+        if 'movemode: moving' in response_lower:
+            status['moving'] = True
+        else:
+            status['moving'] = False
+
+    except:
+        status['state'] = 'unknown'
+
     # Get print progress (M27)
     try:
         response = _send_command(ip, "M27", port)
-        if 'byte' in response.lower():
-            parts = response.split()
-            for part in parts:
-                if '/' in part:
-                    current, total = part.split('/')
-                    status['bytes_printed'] = int(current)
-                    status['bytes_total'] = int(total)
-                    if int(total) > 0:
-                        status['progress'] = round(int(current) / int(total) * 100, 1)
+        lines = response.split('\n')
+        for line in lines:
+            line_lower = line.lower()
+            # Parse byte progress
+            if 'byte' in line_lower:
+                parts = line.split()
+                for part in parts:
+                    if '/' in part:
+                        try:
+                            current, total = part.split('/')
+                            status['bytes_printed'] = int(current)
+                            status['bytes_total'] = int(total)
+                            if int(total) > 0:
+                                status['progress'] = round(int(current) / int(total) * 100, 1)
+                        except:
+                            pass
+            # Parse layer progress
+            if 'layer:' in line_lower:
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    layer_info = parts[1].strip()
+                    if '/' in layer_info:
+                        try:
+                            current_layer, total_layers = layer_info.split('/')
+                            status['current_layer'] = int(current_layer)
+                            status['total_layers'] = int(total_layers)
+                        except:
+                            pass
     except:
         pass
-
-    # Get status (M119)
-    try:
-        response = _send_command(ip, "M119", port)
-        if 'idle' in response.lower():
-            status['state'] = 'idle'
-        elif 'print' in response.lower():
-            status['state'] = 'printing'
-        elif 'pause' in response.lower():
-            status['state'] = 'paused'
-        else:
-            status['state'] = 'unknown'
-    except:
-        status['state'] = 'unknown'
 
     return status
 
