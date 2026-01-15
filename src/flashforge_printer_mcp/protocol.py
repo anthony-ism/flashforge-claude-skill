@@ -392,15 +392,17 @@ def get_camera_url(ip: str) -> str:
     return f"http://{ip}:8080/?action=stream"
 
 
-def check_camera_available(ip: str, timeout: float = 2.0) -> dict:
+def check_camera_available(ip: str, timeout: float = 3.0) -> dict:
     """
     Check if the camera stream is accessible.
+
+    Uses a simple socket connection test to port 8080, since MJPEG streams
+    don't respond well to HEAD requests.
 
     Returns:
         dict with 'available' (bool), 'url' (str), and 'error' (str if not available)
     """
-    import urllib.request
-    import urllib.error
+    import socket
 
     url = get_camera_url(ip)
     snapshot_url = f"http://{ip}:8080/?action=snapshot"
@@ -412,32 +414,19 @@ def check_camera_available(ip: str, timeout: float = 2.0) -> dict:
         'error': None
     }
 
-    # Try to connect to the camera stream
+    # Simple socket connection test - if port 8080 is open, camera service is running
     try:
-        req = urllib.request.Request(url, method='HEAD')
-        req.add_header('User-Agent', 'FlashForge-MCP/1.0')
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            content_type = response.headers.get('Content-Type', '')
-            if 'multipart' in content_type or 'image' in content_type or response.status == 200:
-                result['available'] = True
-                return result
-    except urllib.error.URLError as e:
-        result['error'] = f"Connection failed: {e.reason}"
-    except urllib.error.HTTPError as e:
-        result['error'] = f"HTTP error: {e.code}"
-    except Exception as e:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((ip, 8080))
+        sock.close()
+        result['available'] = True
+        return result
+    except socket.timeout:
+        result['error'] = "Connection timed out"
+    except ConnectionRefusedError:
+        result['error'] = "Connection refused - camera service not running"
+    except OSError as e:
         result['error'] = str(e)
-
-    # If stream failed, try snapshot endpoint
-    try:
-        req = urllib.request.Request(snapshot_url, method='HEAD')
-        req.add_header('User-Agent', 'FlashForge-MCP/1.0')
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            if response.status == 200:
-                result['available'] = True
-                result['error'] = None
-                return result
-    except:
-        pass
 
     return result

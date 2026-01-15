@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Community-Driven MCP Development: A Real Bug Fix Story</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --text: #eee;
+            --text-muted: #aaa;
+            --accent: #e94560;
+            --code-bg: #0d1117;
+            --claude-purple: #c4a7ff;
+            --claude-orange: #d4a574;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.7;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: var(--bg);
+            color: var(--text);
+        }
+        h1 {
+            color: var(--accent);
+            border-bottom: 2px solid var(--accent);
+            padding-bottom: 0.5rem;
+        }
+        h2 {
+            color: var(--accent);
+            margin-top: 2.5rem;
+        }
+        code {
+            background: var(--code-bg);
+            padding: 0.2em 0.4em;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+        img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin: 1rem 0;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        }
+        em {
+            color: var(--text-muted);
+        }
+        strong {
+            color: var(--accent);
+        }
+        ul, ol {
+            padding-left: 1.5rem;
+        }
+        li {
+            margin: 0.5rem 0;
+        }
+        hr {
+            border: none;
+            border-top: 1px solid var(--surface);
+            margin: 2rem 0;
+        }
+        .date {
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        /* Claude Code terminal style */
+        .claude-terminal {
+            background: #000;
+            border-radius: 12px;
+            padding: 1rem;
+            margin: 1.5rem 0;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            overflow-x: auto;
+        }
+        .claude-terminal .prompt {
+            color: #22c55e;
+        }
+        .claude-terminal .user-input {
+            color: #fff;
+        }
+        .claude-terminal .output {
+            color: #d1d5db;
+        }
+        .claude-terminal .mcp-result {
+            color: #d1d5db;
+            border-left: 2px solid #374151;
+            padding-left: 1rem;
+            margin: 0.5rem 0;
+        }
+        .claude-terminal .status-printing {
+            color: #4ade80;
+        }
+        .claude-terminal .progress-bar {
+            color: #4ade80;
+        }
+        .claude-terminal .error {
+            color: #f87171;
+        }
+        .claude-terminal .header {
+            color: #fff;
+            font-weight: bold;
+        }
+        .claude-terminal .label {
+            color: #9ca3af;
+        }
+        .claude-terminal .value {
+            color: #fff;
+        }
+        .claude-terminal .emoji {
+            margin-right: 0.25rem;
+        }
+        .claude-terminal .tool-call {
+            color: #c4a7ff;
+        }
+        .claude-terminal .tool-icon {
+            color: #c4a7ff;
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>Community-Driven MCP Development: A Real Bug Fix Story</h1>
+
+    <h2>The Promise of MCP</h2>
+    <p>MCP (Model Context Protocol) servers let anyone extend Claude's capabilities. But what makes them powerful isn't just the technology—it's that they can be built, tested, and improved collaboratively in real-time.</p>
+    <p>Here's a story from today that demonstrates exactly that.</p>
+
+    <h2>Built in Minutes</h2>
+    <p>The initial MCP server to control my son's FlashForge Adventurer 5M Pro printer was built in a matter of minutes. Claude examined the printer's protocol, wrote the Python code, and I had a working server that could discover printers, check status, and access the camera stream.</p>
+    <p>It worked great. We moved on.</p>
+
+    <h2>Picking Up Where We Left Off</h2>
+    <p>Days later, I came back to start another print. When I asked Claude to show me the printer status, here's what happened:</p>
+
+    <div class="claude-terminal">
+        <div><span class="prompt">❯</span> <span class="user-input">ok lets view the current print</span></div>
+        <br>
+        <div class="tool-call"><span class="tool-icon">⏺</span> flashforge-printer - watch_printer (MCP)</div>
+        <br>
+        <div class="mcp-result">
+            <div class="header"><span class="emoji">🖨️</span> SNMOME9900037</div>
+            <br>
+            <div><span class="label">Model:</span> <span class="value">Flashforge Adventurer 5M Pro</span></div>
+            <div><span class="label">IP:</span> <span class="value">192.168.1.192</span></div>
+            <div><span class="label">Status:</span> <span class="status-printing">🟢 PRINTING (52.0% complete)</span></div>
+            <br>
+            <div><span class="label">File:</span> <span class="value">cutedino_shortlegs_fixed_fixed_fixed.3mf</span></div>
+            <br>
+            <div class="progress-bar">[██████████░░░░░░░░░░] 52.0%</div>
+            <div><span class="label">Layer:</span> <span class="value">147 / 550</span></div>
+            <br>
+            <div><span class="label">Temperatures:</span></div>
+            <div>- Nozzle: 220°C → 220°C</div>
+            <div>- Bed: 50°C → 50°C</div>
+            <br>
+            <div><span class="emoji">📹</span> <span class="header">Camera</span></div>
+            <div><span class="label">Stream URL:</span> <span class="value">http://192.168.1.192:8080/?action=stream</span></div>
+            <div class="error">The camera stream timed out - you may need to check the camera<br>settings on the printer's touchscreen...</div>
+        </div>
+    </div>
+
+    <div class="claude-terminal">
+        <div><span class="prompt">❯</span> <span class="user-input">i opened the stream in my browser and its working fine, why did you think it wasn't available?</span></div>
+    </div>
+
+    <p>Claude dug into the code and found the issue: the camera availability check was timing out on first access. The MJPEG stream wasn't responding fast enough to the initial request.</p>
+
+    <p>I suggested adding retry logic with exponential backoff to handle the slow first connection, and Claude implemented the fix. It's been working smoothly since.</p>
+
+    <h2>Why This Matters</h2>
+    <p><strong>The development cycle here was:</strong></p>
+    <ol>
+        <li>Build initial server in minutes</li>
+        <li>Use it, move on to other things</li>
+        <li>Come back, hit an edge case</li>
+        <li>Fix it in the same conversation</li>
+        <li>Continue using it smoothly</li>
+    </ol>
+
+    <p><strong>This is exactly why community-driven MCP development works:</strong></p>
+    <ul>
+        <li><strong>Rapid prototyping</strong> - The initial server took minutes, not days</li>
+        <li><strong>Real-world testing</strong> - Users find bugs developers miss</li>
+        <li><strong>Immediate iteration</strong> - Report an issue, get a fix, keep working</li>
+        <li><strong>Continuity</strong> - Pick up where you left off, context preserved</li>
+    </ul>
+
+    <img src="images/print-timelapse.gif" alt="Print Timelapse">
+    <p><em>The cute dino print in action, captured via the camera stream.</em></p>
+
+    <h2>The Takeaway</h2>
+    <p>MCP servers aren't finished products shipped from on high. They're living tools that improve through use. Build something in minutes, use it, improve it when you hit an edge case, and keep going.</p>
+    <p>That's the real power of community-driven MCP development.</p>
+
+    <p>You can check out my code online here: <a href="https://github.com/anthony-ism/flashforge-claude-skill">github.com/anthony-ism/flashforge-claude-skill</a></p>
+
+    <hr>
+    <p class="date">January 15, 2026</p>
+</body>
+</html>
