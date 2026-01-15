@@ -1,7 +1,7 @@
 """
 FlashForge Convert MCP Server
 
-Convert 2D images to 3D-printable STL files.
+Convert 2D images to 3D-printable STL files and slice for printing.
 
 Tools:
 - image_to_stl_contour: Edge detection and extrusion for icons/logos
@@ -10,6 +10,7 @@ Tools:
 - image_to_svg: Vector conversion for slicers
 - validate_stl: Check STL printability
 - fix_model: Scale, add base, remove floating pieces from 3D models
+- slice_stl: Slice STL to G-code using OrcaSlicer
 """
 
 import os
@@ -19,6 +20,7 @@ from mcp.types import Tool, TextContent, Resource
 from mcp.server.stdio import stdio_server
 
 from . import converters
+from . import slicer
 
 server = Server("flashforge-convert")
 
@@ -316,6 +318,63 @@ Example: "Fix this model, scale to 100mm with a 3mm base"
                 },
                 "required": ["input_path"]
             }
+        ),
+        Tool(
+            name="slice_stl",
+            description="""Slice an STL file to G-code for printing on FlashForge Adventurer 5M.
+
+Uses OrcaSlicer to generate G-code with optimized settings for your printer.
+The model is automatically centered on the print plate.
+The resulting .gcode file can be sent directly to the printer.
+
+Requires OrcaSlicer to be installed. Set ORCASLICER_PATH if not auto-detected.
+
+Example: "Slice this STL for printing with fine quality and 30% infill"
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "stl_path": {
+                        "type": "string",
+                        "description": "Absolute path to input STL file"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output G-code path (optional, auto-generated if not provided)"
+                    },
+                    "quality": {
+                        "type": "string",
+                        "description": "Print quality preset (default: standard)",
+                        "enum": ["draft", "standard", "fine"],
+                        "default": "standard"
+                    },
+                    "layer_height": {
+                        "type": "number",
+                        "description": "Override layer height in mm (0.08-0.4, default: based on quality)",
+                        "minimum": 0.08,
+                        "maximum": 0.4
+                    },
+                    "infill_percent": {
+                        "type": "integer",
+                        "description": "Infill density percentage (default: 20)",
+                        "default": 20,
+                        "minimum": 0,
+                        "maximum": 100
+                    },
+                    "support": {
+                        "type": "boolean",
+                        "description": "Enable support structures (default: false)",
+                        "default": False
+                    },
+                    "material": {
+                        "type": "string",
+                        "description": "Filament material type (default: pla)",
+                        "enum": ["pla", "petg"],
+                        "default": "pla"
+                    }
+                },
+                "required": ["stl_path"]
+            }
         )
     ]
 
@@ -405,6 +464,29 @@ async def call_tool(name: str, arguments: dict):
             return [TextContent(type="text", text=format_fix_result(result))]
         except Exception as e:
             return [TextContent(type="text", text=f"Error fixing model: {e}")]
+
+    elif name == "slice_stl":
+        try:
+            # Check if OrcaSlicer is available
+            orca_path = slicer.find_orcaslicer()
+            if not orca_path:
+                return [TextContent(type="text", text=slicer.get_not_found_message())]
+
+            output_path = arguments.get("output_path") or get_output_path(arguments["stl_path"], "_sliced", ".gcode")
+
+            result = slicer.slice_stl(
+                stl_path=arguments["stl_path"],
+                output_path=output_path,
+                quality=arguments.get("quality", "standard"),
+                layer_height=arguments.get("layer_height"),
+                infill_percent=arguments.get("infill_percent", 20),
+                support=arguments.get("support", False),
+                material=arguments.get("material", "pla"),
+            )
+
+            return [TextContent(type="text", text=format_slice_result(result))]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error slicing STL: {e}")]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -507,6 +589,31 @@ def format_fix_result(result: dict) -> str:
 - Fits build volume (220mm): {'Yes' if result.get('fits_build_volume') else 'No - needs rescaling'}
 """
     return output
+
+
+def format_slice_result(result: dict) -> str:
+    """Format slicing result for display."""
+    file_size_kb = result.get("file_size_bytes", 0) / 1024
+    file_size_str = f"{file_size_kb:.1f} KB" if file_size_kb < 1024 else f"{file_size_kb/1024:.1f} MB"
+
+    return f"""**Slicing Complete**
+
+**Output:** {result.get('output_path', 'N/A')}
+**File Size:** {file_size_str}
+
+**Print Settings:**
+- Quality: {result.get('quality', 'standard')}
+- Layer Height: {result.get('layer_height', 0.2)}mm
+- Infill: {result.get('infill_percent', 20)}%
+- Support: {'Yes' if result.get('support') else 'No'}
+- Material: {result.get('material', 'PLA')}
+
+**Estimates:**
+- Print Time: {result.get('print_time_estimate', 'Unknown')}
+- Filament: {result.get('filament_used_g', 0):.1f}g ({result.get('filament_used_m', 0):.2f}m)
+
+Ready to send to printer with `send_gcode_file`!
+"""
 
 
 @server.list_resources()
