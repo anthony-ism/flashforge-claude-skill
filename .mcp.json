@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "flashforge-printer": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "flashforge_printer_mcp"],
+      "env": {
+        "PYTHONPATH": "src:."
+      }
+    },
+    "flashforge-convert": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "flashforge_convert_mcp"],
+      "env": {
+        "PYTHONPATH": "src:."
+      }
+    }
+  }
+}

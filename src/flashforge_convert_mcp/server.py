@@ -1,7 +1,7 @@
 """
 FlashForge Convert MCP Server
 
-Convert 2D images to 3D-printable STL files.
+Convert 2D images to 3D-printable STL files and slice for printing.
 
 Tools:
 - image_to_stl_contour: Edge detection and extrusion for icons/logos
@@ -9,6 +9,8 @@ Tools:
 - image_to_lithophane: Create backlit photo displays
 - image_to_svg: Vector conversion for slicers
 - validate_stl: Check STL printability
+- fix_model: Scale, add base, remove floating pieces from 3D models
+- slice_stl: Slice STL to G-code using OrcaSlicer
 """
 
 import os
@@ -18,8 +20,20 @@ from mcp.types import Tool, TextContent, Resource
 from mcp.server.stdio import stdio_server
 
 from . import converters
+from . import slicer
 
 server = Server("flashforge-convert")
+
+# Default output directory (relative to where the server is run from)
+OUTPUT_DIR = Path.cwd() / "output"
+
+
+def get_output_path(input_path: str, suffix: str = "", extension: str = ".stl") -> str:
+    """Generate output path in the output directory based on input filename."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    input_name = Path(input_path).stem
+    output_name = f"{input_name}{suffix}{extension}"
+    return str(OUTPUT_DIR / output_name)
 
 
 @server.list_tools()
@@ -46,7 +60,7 @@ Example: "Convert this Mario icon to a 3D keychain, 40mm wide with a 2mm base"
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "Absolute path for output STL file"
+                        "description": "Output STL filename (optional, auto-generated in output folder if not provided)"
                     },
                     "height_mm": {
                         "type": "number",
@@ -81,7 +95,7 @@ Example: "Convert this Mario icon to a 3D keychain, 40mm wide with a 2mm base"
                         "maximum": 10
                     }
                 },
-                "required": ["image_path", "output_path"]
+                "required": ["image_path"]
             }
         ),
         Tool(
@@ -104,7 +118,7 @@ Example: "Create a 3D relief from this mountain photo, 10mm max height"
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "Absolute path for output STL file"
+                        "description": "Output STL filename (optional, auto-generated in output folder if not provided)"
                     },
                     "max_height_mm": {
                         "type": "number",
@@ -133,7 +147,7 @@ Example: "Create a 3D relief from this mountain photo, 10mm max height"
                         "maximum": 10
                     }
                 },
-                "required": ["image_path", "output_path"]
+                "required": ["image_path"]
             }
         ),
         Tool(
@@ -156,7 +170,7 @@ Example: "Make a lithophane from this family photo, 100mm wide"
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "Absolute path for output STL file"
+                        "description": "Output STL filename (optional, auto-generated in output folder if not provided)"
                     },
                     "thickness_mm": {
                         "type": "number",
@@ -179,7 +193,7 @@ Example: "Make a lithophane from this family photo, 100mm wide"
                         "default": "none"
                     }
                 },
-                "required": ["image_path", "output_path"]
+                "required": ["image_path"]
             }
         ),
         Tool(
@@ -202,7 +216,7 @@ Example: "Convert this logo to SVG for OrcaSlicer"
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "Absolute path for output SVG file"
+                        "description": "Output SVG filename (optional, auto-generated in output folder if not provided)"
                     },
                     "smoothing": {
                         "type": "string",
@@ -223,7 +237,7 @@ Example: "Convert this logo to SVG for OrcaSlicer"
                         "default": False
                     }
                 },
-                "required": ["image_path", "output_path"]
+                "required": ["image_path"]
             }
         ),
         Tool(
@@ -248,6 +262,119 @@ Example: "Check if this STL is printable"
                 },
                 "required": ["stl_path"]
             }
+        ),
+        Tool(
+            name="fix_model",
+            description="""Fix and prepare a 3D model for printing.
+
+Performs multiple fixes on STL/GLB/OBJ files:
+- **Scale** to target height (default 80mm)
+- **Remove floating pieces** that can't print
+- **Add base plate** for bed adhesion
+- **Repair mesh** using voxelization for clean, watertight output
+
+Best for: AI-generated models (Tripo, etc), downloaded models with issues,
+models that are too small or have disconnected parts.
+
+Example: "Fix this model, scale to 100mm with a 3mm base"
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "Absolute path to input 3D model (STL, GLB, OBJ)"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output STL filename (optional, auto-generated in output folder if not provided)"
+                    },
+                    "target_height_mm": {
+                        "type": "number",
+                        "description": "Target height in millimeters (default: 80)",
+                        "default": 80,
+                        "minimum": 10,
+                        "maximum": 220
+                    },
+                    "base_height_mm": {
+                        "type": "number",
+                        "description": "Base plate thickness in mm (default: 2, use 0 for no base)",
+                        "default": 2,
+                        "minimum": 0,
+                        "maximum": 10
+                    },
+                    "base_padding_mm": {
+                        "type": "number",
+                        "description": "Extra padding around model for base in mm (default: 3)",
+                        "default": 3,
+                        "minimum": 0,
+                        "maximum": 20
+                    },
+                    "remove_floating": {
+                        "type": "boolean",
+                        "description": "Remove disconnected floating pieces (default: true)",
+                        "default": True
+                    }
+                },
+                "required": ["input_path"]
+            }
+        ),
+        Tool(
+            name="slice_stl",
+            description="""Slice an STL file to G-code for printing on FlashForge Adventurer 5M.
+
+Uses OrcaSlicer to generate G-code with optimized settings for your printer.
+The model is automatically centered on the print plate.
+The resulting .gcode file can be sent directly to the printer.
+
+Requires OrcaSlicer to be installed. Set ORCASLICER_PATH if not auto-detected.
+
+Example: "Slice this STL for printing with fine quality and 30% infill"
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "stl_path": {
+                        "type": "string",
+                        "description": "Absolute path to input STL file"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output G-code path (optional, auto-generated if not provided)"
+                    },
+                    "quality": {
+                        "type": "string",
+                        "description": "Print quality preset (default: standard)",
+                        "enum": ["draft", "standard", "fine"],
+                        "default": "standard"
+                    },
+                    "layer_height": {
+                        "type": "number",
+                        "description": "Override layer height in mm (0.08-0.4, default: based on quality)",
+                        "minimum": 0.08,
+                        "maximum": 0.4
+                    },
+                    "infill_percent": {
+                        "type": "integer",
+                        "description": "Infill density percentage (default: 20)",
+                        "default": 20,
+                        "minimum": 0,
+                        "maximum": 100
+                    },
+                    "support": {
+                        "type": "boolean",
+                        "description": "Enable support structures (default: false)",
+                        "default": False
+                    },
+                    "material": {
+                        "type": "string",
+                        "description": "Filament material type (default: pla)",
+                        "enum": ["pla", "petg"],
+                        "default": "pla"
+                    }
+                },
+                "required": ["stl_path"]
+            }
         )
     ]
 
@@ -258,9 +385,10 @@ async def call_tool(name: str, arguments: dict):
 
     if name == "image_to_stl_contour":
         try:
+            output_path = arguments.get("output_path") or get_output_path(arguments["image_path"], "_contour")
             result = converters.image_to_stl_contour(
                 image_path=arguments["image_path"],
-                output_path=arguments["output_path"],
+                output_path=output_path,
                 height_mm=arguments.get("height_mm", 5.0),
                 scale_mm=arguments.get("scale_mm"),
                 threshold=arguments.get("threshold", 127),
@@ -273,9 +401,10 @@ async def call_tool(name: str, arguments: dict):
 
     elif name == "image_to_stl_heightmap":
         try:
+            output_path = arguments.get("output_path") or get_output_path(arguments["image_path"], "_heightmap")
             result = converters.image_to_stl_heightmap(
                 image_path=arguments["image_path"],
-                output_path=arguments["output_path"],
+                output_path=output_path,
                 max_height_mm=arguments.get("max_height_mm", 10.0),
                 base_mm=arguments.get("base_mm", 2.0),
                 invert=arguments.get("invert", False),
@@ -287,9 +416,10 @@ async def call_tool(name: str, arguments: dict):
 
     elif name == "image_to_lithophane":
         try:
+            output_path = arguments.get("output_path") or get_output_path(arguments["image_path"], "_lithophane")
             result = converters.image_to_lithophane(
                 image_path=arguments["image_path"],
-                output_path=arguments["output_path"],
+                output_path=output_path,
                 thickness_mm=arguments.get("thickness_mm", 3.0),
                 width_mm=arguments.get("width_mm", 100.0),
                 frame=arguments.get("frame", "none")
@@ -300,9 +430,10 @@ async def call_tool(name: str, arguments: dict):
 
     elif name == "image_to_svg":
         try:
+            output_path = arguments.get("output_path") or get_output_path(arguments["image_path"], "", ".svg")
             result = converters.image_to_svg(
                 image_path=arguments["image_path"],
-                output_path=arguments["output_path"],
+                output_path=output_path,
                 smoothing=arguments.get("smoothing", "medium"),
                 threshold=arguments.get("threshold", 127),
                 invert=arguments.get("invert", False)
@@ -317,6 +448,45 @@ async def call_tool(name: str, arguments: dict):
             return [TextContent(type="text", text=format_validation(arguments["stl_path"], result))]
         except Exception as e:
             return [TextContent(type="text", text=f"Error validating STL: {e}")]
+
+    elif name == "fix_model":
+        try:
+            from flashforge.scripts.fix_model import fix_model
+            output_path = arguments.get("output_path") or get_output_path(arguments["input_path"], "_fixed")
+            result = fix_model(
+                input_path=arguments["input_path"],
+                output_path=output_path,
+                target_height_mm=arguments.get("target_height_mm", 80.0),
+                base_height_mm=arguments.get("base_height_mm", 2.0),
+                base_padding_mm=arguments.get("base_padding_mm", 3.0),
+                remove_floating=arguments.get("remove_floating", True),
+            )
+            return [TextContent(type="text", text=format_fix_result(result))]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error fixing model: {e}")]
+
+    elif name == "slice_stl":
+        try:
+            # Check if OrcaSlicer is available
+            orca_path = slicer.find_orcaslicer()
+            if not orca_path:
+                return [TextContent(type="text", text=slicer.get_not_found_message())]
+
+            output_path = arguments.get("output_path") or get_output_path(arguments["stl_path"], "_sliced", ".gcode")
+
+            result = slicer.slice_stl(
+                stl_path=arguments["stl_path"],
+                output_path=output_path,
+                quality=arguments.get("quality", "standard"),
+                layer_height=arguments.get("layer_height"),
+                infill_percent=arguments.get("infill_percent", 20),
+                support=arguments.get("support", False),
+                material=arguments.get("material", "pla"),
+            )
+
+            return [TextContent(type="text", text=format_slice_result(result))]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error slicing STL: {e}")]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -394,6 +564,56 @@ def format_validation(path: str, result: dict) -> str:
         output += "\n**No issues detected.** Ready to slice and print!"
 
     return output
+
+
+def format_fix_result(result: dict) -> str:
+    """Format model fix result for display."""
+    orig = result.get("original_dims", [0, 0, 0])
+    final = result.get("final_dims", [0, 0, 0])
+
+    output = f"""**Model Fix Complete**
+
+**Output:** {result.get('output_path', 'N/A')}
+
+**Original Size:** {orig[0]:.1f} x {orig[1]:.1f} x {orig[2]:.1f} mm
+**Final Size:** {final[0]:.1f} x {final[1]:.1f} x {final[2]:.1f} mm
+**Scale Factor:** {result.get('scale_factor', 1):.2f}x
+
+**Fixes Applied:**
+- Floating pieces removed: {result.get('removed_bodies', 0)}
+- Base plate added: {'Yes' if result.get('final_dims', [0,0,0])[2] > result.get('original_dims', [0,0,0])[2] * result.get('scale_factor', 1) else 'No'}
+
+**Mesh Quality:**
+- Triangles: {result.get('faces', 0):,}
+- Watertight: {'Yes' if result.get('watertight') else 'No'}
+- Fits build volume (220mm): {'Yes' if result.get('fits_build_volume') else 'No - needs rescaling'}
+"""
+    return output
+
+
+def format_slice_result(result: dict) -> str:
+    """Format slicing result for display."""
+    file_size_kb = result.get("file_size_bytes", 0) / 1024
+    file_size_str = f"{file_size_kb:.1f} KB" if file_size_kb < 1024 else f"{file_size_kb/1024:.1f} MB"
+
+    return f"""**Slicing Complete**
+
+**Output:** {result.get('output_path', 'N/A')}
+**File Size:** {file_size_str}
+
+**Print Settings:**
+- Quality: {result.get('quality', 'standard')}
+- Layer Height: {result.get('layer_height', 0.2)}mm
+- Infill: {result.get('infill_percent', 20)}%
+- Support: {'Yes' if result.get('support') else 'No'}
+- Material: {result.get('material', 'PLA')}
+
+**Estimates:**
+- Print Time: {result.get('print_time_estimate', 'Unknown')}
+- Filament: {result.get('filament_used_g', 0):.1f}g ({result.get('filament_used_m', 0):.2f}m)
+
+Ready to send to printer with `send_gcode_file`!
+"""
 
 
 @server.list_resources()

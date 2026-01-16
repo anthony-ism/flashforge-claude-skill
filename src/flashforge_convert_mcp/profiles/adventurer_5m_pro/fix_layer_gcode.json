@@ -1,0 +1,6 @@
+{
+    "type": "process",
+    "from": "user",
+    "name": "Fix Layer Gcode",
+    "layer_change_gcode": ";AFTER_LAYER_CHANGE\n;[layer_z]\nG92 E0"
+}
