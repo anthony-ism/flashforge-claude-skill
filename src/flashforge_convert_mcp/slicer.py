@@ -5,6 +5,20 @@ Handles:
 - OrcaSlicer executable detection
 - Profile management
 - G-code generation from STL files
+
+KNOWN ISSUES:
+    OrcaSlicer CLI has profile compatibility validation that fails with
+    custom/standalone profiles. The error "process not compatible with printer"
+    occurs because:
+
+    1. OrcaSlicer profiles use inheritance chains that CLI validates strictly
+    2. The bundled FlashForge profiles have a bug (missing G92 E0 in layer_change_gcode)
+    3. compatible_printers field matching is strict and underdocumented
+
+    See docs/SLICING.md for workarounds and details.
+
+    Current workaround: Use OrcaSlicer GUI to slice, then use send_gcode_file
+    MCP tool to upload the G-code to the printer.
 """
 
 import os
@@ -76,30 +90,16 @@ def find_orcaslicer() -> Optional[str]:
 
 def get_profiles_dir() -> Path:
     """
-    Get the OrcaSlicer system profiles directory for FlashForge.
+    Get the bundled profiles directory.
 
-    Checks for user override via ORCASLICER_PROFILES_DIR environment variable,
-    otherwise uses OrcaSlicer's built-in system profiles.
+    Uses standalone profiles bundled with this package that don't rely on
+    OrcaSlicer's system profile inheritance (which has bugs).
     """
     # Check for user override
     if profiles_dir := os.environ.get("ORCASLICER_PROFILES_DIR"):
         return Path(profiles_dir)
 
-    # Use OrcaSlicer's built-in FlashForge profiles
-    if sys.platform == "darwin":
-        return Path("/Applications/OrcaSlicer.app/Contents/Resources/profiles/Flashforge")
-    elif sys.platform == "win32":
-        return Path(r"C:\Program Files\OrcaSlicer\resources\profiles\Flashforge")
-    else:
-        # Linux - check common paths
-        for path in [
-            Path("/opt/OrcaSlicer/resources/profiles/Flashforge"),
-            Path("/usr/share/OrcaSlicer/resources/profiles/Flashforge"),
-        ]:
-            if path.exists():
-                return path
-
-    # Fallback to bundled profiles
+    # Use bundled standalone profiles
     return Path(__file__).parent / "profiles" / "adventurer_5m_pro"
 
 
@@ -176,22 +176,19 @@ def slice_stl(
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Map quality to OrcaSlicer system profile names
-    # These match the built-in Flashforge Adventurer 5M Pro profiles
-    quality_to_process = {
-        "draft": "0.24mm Draft @Flashforge AD5M Pro 0.4 Nozzle.json",
-        "standard": "0.20mm Standard @Flashforge AD5M Pro 0.4 Nozzle.json",
-        "fine": "0.12mm Fine @Flashforge AD5M Pro 0.4 Nozzle.json",
-    }
+    # Use bundled standalone profiles (no inheritance issues)
+    printer_profile = profiles_dir / "machine_standalone.json"
+    process_profile = profiles_dir / "process_standalone.json"
+    filament_profile = profiles_dir / "filament_standalone.json"
 
-    material_to_filament = {
-        "pla": "Flashforge Generic PLA.json",
-        "petg": "Flashforge Generic PETG.json",
-    }
-
-    printer_profile = profiles_dir / "machine" / "Flashforge Adventurer 5M Pro 0.4 Nozzle.json"
-    process_profile = profiles_dir / "process" / quality_to_process.get(quality, quality_to_process["standard"])
-    filament_profile = profiles_dir / "filament" / material_to_filament.get(material, material_to_filament["pla"])
+    # Verify profiles exist
+    for profile_path, profile_name in [
+        (printer_profile, "machine"),
+        (process_profile, "process"),
+        (filament_profile, "filament"),
+    ]:
+        if not profile_path.exists():
+            raise RuntimeError(f"Missing {profile_name} profile: {profile_path}")
 
     # Build settings string for OrcaSlicer
     settings_files = f"{printer_profile};{process_profile}"
