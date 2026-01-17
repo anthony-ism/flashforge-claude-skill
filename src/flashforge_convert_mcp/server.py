@@ -4,12 +4,13 @@ FlashForge Convert MCP Server
 Convert 2D images to 3D-printable STL files and slice for printing.
 
 Tools:
+- generate_3d_image_prompt: Create optimized prompts for AI image generation (for Meshy/Tripo3D)
 - image_to_stl_contour: Edge detection and extrusion for icons/logos
 - image_to_stl_heightmap: Brightness-to-height for relief models
 - image_to_lithophane: Create backlit photo displays
 - image_to_svg: Vector conversion for slicers
 - validate_stl: Check STL printability
-- fix_model: Scale, add base, remove floating pieces from 3D models
+- fix_model: Auto-orient, scale, remove floating pieces from 3D models
 - slice_stl: Slice STL to G-code using OrcaSlicer
 - split_model: Split 3D models into printable parts
 - add_connectors: Add peg/hole snap-fit connectors to parts
@@ -45,6 +46,51 @@ def get_output_path(input_path: str, suffix: str = "", extension: str = ".stl") 
 async def list_tools():
     """List all available conversion tools."""
     return [
+        Tool(
+            name="generate_3d_image_prompt",
+            description="""Generate an optimized image prompt for AI 3D model conversion.
+
+Takes your concept and returns a detailed prompt optimized for image generators
+(Midjourney, DALL-E, etc.) that will produce images ideal for conversion to 3D
+models using Meshy, Tripo3D, or similar AI-to-3D services.
+
+The generated prompt includes best practices:
+- Clean studio lighting and neutral background
+- Optimal camera angle (3/4 view or front-facing)
+- Clear subject separation and defined edges
+- Style keywords that work well for 3D conversion
+
+Example: "a wizard with a staff" → full optimized prompt for image generation
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "concept": {
+                        "type": "string",
+                        "description": "Your concept or idea (e.g., 'a cute robot', 'fantasy sword', 'wizard figurine')"
+                    },
+                    "style": {
+                        "type": "string",
+                        "description": "Art style preference",
+                        "enum": ["realistic", "stylized", "cartoon", "anime", "miniature"],
+                        "default": "stylized"
+                    },
+                    "view": {
+                        "type": "string",
+                        "description": "Camera angle for the image",
+                        "enum": ["front", "3/4 view", "turnaround", "isometric"],
+                        "default": "3/4 view"
+                    },
+                    "for_service": {
+                        "type": "string",
+                        "description": "Target 3D conversion service",
+                        "enum": ["meshy", "tripo3d", "any"],
+                        "default": "any"
+                    }
+                },
+                "required": ["concept"]
+            }
+        ),
         Tool(
             name="image_to_stl_contour",
             description="""Convert a PNG/JPG image to STL using edge detection and extrusion.
@@ -570,11 +616,90 @@ Example: "Package these 3 parts into an assembly.3mf file"
     ]
 
 
+def generate_3d_prompt(concept: str, style: str = "stylized", view: str = "3/4 view", for_service: str = "any") -> str:
+    """Generate an optimized prompt for AI image generation targeting 3D conversion."""
+
+    # Style modifiers
+    style_modifiers = {
+        "realistic": "photorealistic, highly detailed, realistic proportions, realistic textures",
+        "stylized": "stylized 3D render, clean shapes, smooth surfaces, video game character style",
+        "cartoon": "3D cartoon style, bold shapes, smooth curves, Pixar-like, Disney-inspired",
+        "anime": "anime figure style, clean lines, cel-shaded look, figure collectible",
+        "miniature": "tabletop miniature, gaming figurine, detailed sculpt, paintable surface"
+    }
+
+    # View/angle modifiers
+    view_modifiers = {
+        "front": "front view, facing camera, symmetrical pose",
+        "3/4 view": "3/4 view angle, dynamic pose, showing depth",
+        "turnaround": "character turnaround sheet, multiple angles, T-pose reference",
+        "isometric": "isometric view, 45 degree angle, game asset style"
+    }
+
+    # Service-specific tips
+    service_tips = {
+        "meshy": "single subject, clear silhouette, no text or logos",
+        "tripo3d": "centered subject, simple pose, avoid thin or floating elements",
+        "any": "single centered subject, clear edges, no background clutter"
+    }
+
+    # Build the prompt
+    style_mod = style_modifiers.get(style, style_modifiers["stylized"])
+    view_mod = view_modifiers.get(view, view_modifiers["3/4 view"])
+    service_tip = service_tips.get(for_service, service_tips["any"])
+
+    prompt = f"""{concept}, {style_mod}, {view_mod},
+studio lighting, soft shadows, neutral gray background,
+full body visible, clean edges, high detail,
+octane render, unreal engine 5 quality,
+{service_tip},
+professional 3D model reference, product photography style"""
+
+    # Clean up whitespace
+    prompt = " ".join(prompt.split())
+
+    return prompt
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """Handle tool calls."""
 
-    if name == "image_to_stl_contour":
+    if name == "generate_3d_image_prompt":
+        concept = arguments["concept"]
+        style = arguments.get("style", "stylized")
+        view = arguments.get("view", "3/4 view")
+        for_service = arguments.get("for_service", "any")
+
+        prompt = generate_3d_prompt(concept, style, view, for_service)
+
+        result = f"""**Optimized Prompt for 3D Model Generation**
+
+**Your concept:** {concept}
+**Style:** {style}
+**View:** {view}
+**Target service:** {for_service}
+
+---
+
+**Generated prompt (copy this to your image generator):**
+
+```
+{prompt}
+```
+
+---
+
+**Tips for best results:**
+- Generate multiple images and pick the cleanest one
+- Avoid images with text, watermarks, or busy backgrounds
+- The subject should be fully visible (no cropping)
+- Simple poses convert better than complex action poses
+- After generating, use `fix_model` to auto-orient and scale for printing
+"""
+        return [TextContent(type="text", text=result)]
+
+    elif name == "image_to_stl_contour":
         try:
             output_path = arguments.get("output_path") or get_output_path(arguments["image_path"], "_contour")
             result = converters.image_to_stl_contour(
