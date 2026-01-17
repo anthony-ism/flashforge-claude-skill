@@ -9,14 +9,81 @@ import numpy as np
 from pathlib import Path
 
 
+def auto_orient_upright(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """
+    Orient a mesh so its longest axis is vertical (Z-up).
+
+    Uses PCA to find principal axes and rotates so the longest
+    dimension becomes the height. Useful for figurines that are
+    lying on their back/side.
+    """
+    # Get principal axes using PCA on vertices
+    centered = mesh.vertices - mesh.vertices.mean(axis=0)
+    cov = np.cov(centered.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
+
+    # Sort by eigenvalue (variance) - largest = longest axis
+    order = np.argsort(eigenvalues)[::-1]
+    eigenvalues = eigenvalues[order]
+    eigenvectors = eigenvectors[:, order]
+
+    # Current longest axis (first principal component)
+    longest_axis = eigenvectors[:, 0]
+
+    # We want longest axis to be Z (up)
+    target_axis = np.array([0, 0, 1])
+
+    # Check if already mostly aligned with Z
+    alignment = abs(np.dot(longest_axis, target_axis))
+    if alignment > 0.9:
+        print("  Model already oriented upright")
+        return mesh
+
+    # Calculate rotation to align longest axis with Z
+    # Using Rodrigues' rotation formula
+    v = np.cross(longest_axis, target_axis)
+    s = np.linalg.norm(v)
+    c = np.dot(longest_axis, target_axis)
+
+    if s < 1e-6:
+        # Axes are parallel or anti-parallel
+        if c < 0:
+            # 180 degree rotation around X
+            rotation_matrix = np.array([
+                [1, 0, 0],
+                [0, -1, 0],
+                [0, 0, -1]
+            ])
+        else:
+            rotation_matrix = np.eye(3)
+    else:
+        # Skew-symmetric cross-product matrix
+        vx = np.array([
+            [0, -v[2], v[1]],
+            [v[2], 0, -v[0]],
+            [-v[1], v[0], 0]
+        ])
+        rotation_matrix = np.eye(3) + vx + vx @ vx * ((1 - c) / (s * s))
+
+    # Apply rotation
+    mesh.apply_transform(
+        trimesh.transformations.compose_matrix(angles=None, translate=None, scale=None)
+    )
+    mesh.vertices = mesh.vertices @ rotation_matrix.T
+
+    print(f"  Rotated model to stand upright (alignment was {alignment:.2f})")
+    return mesh
+
+
 def fix_model(
     input_path: str,
     output_path: str = None,
     target_height_mm: float = 80.0,
-    base_height_mm: float = 2.0,
+    base_height_mm: float = 0,
     base_padding_mm: float = 3.0,
     remove_floating: bool = True,
     min_body_ratio: float = 0.01,
+    auto_orient: bool = True,
 ) -> dict:
     """
     Fix a 3D model for printing.
@@ -25,10 +92,11 @@ def fix_model(
         input_path: Path to input STL/GLB/OBJ file
         output_path: Path to output STL file (default: input_fixed.stl)
         target_height_mm: Target height in mm
-        base_height_mm: Height of the base plate
+        base_height_mm: Height of the base plate (0 = no base)
         base_padding_mm: Padding around the model for the base
         remove_floating: Remove disconnected floating pieces
         min_body_ratio: Minimum volume ratio to keep (relative to largest body)
+        auto_orient: Automatically orient model upright (longest axis = Z)
 
     Returns:
         dict with fix results
@@ -45,7 +113,12 @@ def fix_model(
     # Handle scenes (multiple objects)
     if isinstance(mesh, trimesh.Scene):
         print("Converting scene to single mesh...")
-        mesh = mesh.dump(concatenate=True)
+        mesh = mesh.to_geometry()
+
+    # Auto-orient to stand upright (before measuring original dims)
+    if auto_orient:
+        print("\nAuto-orienting model...")
+        mesh = auto_orient_upright(mesh)
 
     original_dims = mesh.bounding_box.extents.copy()
     original_faces = len(mesh.faces)
@@ -165,8 +238,8 @@ def main():
         help="Target height in mm (default: 80)"
     )
     parser.add_argument(
-        "--base", type=float, default=2.0,
-        help="Base plate height in mm (default: 2, use 0 for no base)"
+        "--base", type=float, default=0,
+        help="Base plate height in mm (default: 0 = no base)"
     )
     parser.add_argument(
         "--padding", type=float, default=3.0,
@@ -175,6 +248,10 @@ def main():
     parser.add_argument(
         "--keep-floating", action="store_true",
         help="Keep floating/disconnected pieces"
+    )
+    parser.add_argument(
+        "--no-orient", action="store_true",
+        help="Disable auto-orientation (model stays in original orientation)"
     )
 
     args = parser.parse_args()
@@ -186,6 +263,7 @@ def main():
         base_height_mm=args.base,
         base_padding_mm=args.padding,
         remove_floating=not args.keep_floating,
+        auto_orient=not args.no_orient,
     )
 
 
