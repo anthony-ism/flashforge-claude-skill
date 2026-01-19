@@ -4,13 +4,18 @@ FlashForge Convert MCP Server
 Convert 2D images to 3D-printable STL files and slice for printing.
 
 Tools:
+- generate_3d_image_prompt: Create optimized prompts for AI image generation (for Meshy/Tripo3D)
 - image_to_stl_contour: Edge detection and extrusion for icons/logos
 - image_to_stl_heightmap: Brightness-to-height for relief models
 - image_to_lithophane: Create backlit photo displays
 - image_to_svg: Vector conversion for slicers
 - validate_stl: Check STL printability
-- fix_model: Scale, add base, remove floating pieces from 3D models
+- fix_model: Auto-orient, scale, remove floating pieces from 3D models
 - slice_stl: Slice STL to G-code using OrcaSlicer
+- split_model: Split 3D models into printable parts
+- add_connectors: Add peg/hole snap-fit connectors to parts
+- analyze_split_points: Suggest optimal cut locations for figurines
+- export_assembly_3mf: Combine parts into a 3MF assembly
 """
 
 import os
@@ -21,6 +26,7 @@ from mcp.server.stdio import stdio_server
 
 from . import converters
 from . import slicer
+from . import figurines
 
 server = Server("flashforge-convert")
 
@@ -40,6 +46,51 @@ def get_output_path(input_path: str, suffix: str = "", extension: str = ".stl") 
 async def list_tools():
     """List all available conversion tools."""
     return [
+        Tool(
+            name="generate_3d_image_prompt",
+            description="""Generate an optimized image prompt for AI 3D model conversion.
+
+Takes your concept and returns a detailed prompt optimized for image generators
+(Midjourney, DALL-E, etc.) that will produce images ideal for conversion to 3D
+models using Meshy, Tripo3D, or similar AI-to-3D services.
+
+The generated prompt includes best practices:
+- Clean studio lighting and neutral background
+- Optimal camera angle (3/4 view or front-facing)
+- Clear subject separation and defined edges
+- Style keywords that work well for 3D conversion
+
+Example: "a wizard with a staff" → full optimized prompt for image generation
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "concept": {
+                        "type": "string",
+                        "description": "Your concept or idea (e.g., 'a cute robot', 'fantasy sword', 'wizard figurine')"
+                    },
+                    "style": {
+                        "type": "string",
+                        "description": "Art style preference",
+                        "enum": ["realistic", "stylized", "cartoon", "anime", "miniature"],
+                        "default": "stylized"
+                    },
+                    "view": {
+                        "type": "string",
+                        "description": "Camera angle for the image",
+                        "enum": ["front", "3/4 view", "turnaround", "isometric"],
+                        "default": "3/4 view"
+                    },
+                    "for_service": {
+                        "type": "string",
+                        "description": "Target 3D conversion service",
+                        "enum": ["meshy", "tripo3d", "any"],
+                        "default": "any"
+                    }
+                },
+                "required": ["concept"]
+            }
+        ),
         Tool(
             name="image_to_stl_contour",
             description="""Convert a PNG/JPG image to STL using edge detection and extrusion.
@@ -268,15 +319,15 @@ Example: "Check if this STL is printable"
             description="""Fix and prepare a 3D model for printing.
 
 Performs multiple fixes on STL/GLB/OBJ files:
+- **Auto-orient** to stand upright (figurines lying down are rotated)
 - **Scale** to target height (default 80mm)
 - **Remove floating pieces** that can't print
-- **Add base plate** for bed adhesion
-- **Repair mesh** using voxelization for clean, watertight output
+- **Repair mesh** for clean, watertight output
 
-Best for: AI-generated models (Tripo, etc), downloaded models with issues,
-models that are too small or have disconnected parts.
+Best for: AI-generated models (Meshy, Tripo, etc), downloaded models with issues,
+models that are too small, lying on their side, or have disconnected parts.
 
-Example: "Fix this model, scale to 100mm with a 3mm base"
+Example: "Fix this model and scale to 100mm"
 """,
             inputSchema={
                 "type": "object",
@@ -298,8 +349,8 @@ Example: "Fix this model, scale to 100mm with a 3mm base"
                     },
                     "base_height_mm": {
                         "type": "number",
-                        "description": "Base plate thickness in mm (default: 2, use 0 for no base)",
-                        "default": 2,
+                        "description": "Base plate thickness in mm (default: 0 = no base)",
+                        "default": 0,
                         "minimum": 0,
                         "maximum": 10
                     },
@@ -313,6 +364,11 @@ Example: "Fix this model, scale to 100mm with a 3mm base"
                     "remove_floating": {
                         "type": "boolean",
                         "description": "Remove disconnected floating pieces (default: true)",
+                        "default": True
+                    },
+                    "auto_orient": {
+                        "type": "boolean",
+                        "description": "Auto-orient model to stand upright (default: true)",
                         "default": True
                     }
                 },
@@ -375,15 +431,275 @@ Example: "Slice this STL for printing with fine quality and 30% infill"
                 },
                 "required": ["stl_path"]
             }
+        ),
+        # Multi-part figurine tools
+        Tool(
+            name="split_model",
+            description="""Split a 3D model into printable parts using cut planes.
+
+Best for: figurines too tall to print, models that need assembly.
+
+Cuts the model at specified Z heights and creates separate watertight STL files
+for each part. Parts are automatically positioned at Z=0 for printing.
+
+Example: "Split this knight figurine at 50mm and 100mm for easier printing"
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "Absolute path to input 3D model (STL, GLB, OBJ)"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "Directory for output part files"
+                    },
+                    "cut_heights_z": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "List of Z heights (in mm) for horizontal cuts, e.g., [50, 100]"
+                    },
+                    "cut_planes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "origin": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "description": "[x, y, z] point on the cut plane"
+                                },
+                                "normal": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "description": "[nx, ny, nz] direction the plane faces"
+                                }
+                            }
+                        },
+                        "description": "Advanced: custom cut planes with origin and normal vectors"
+                    }
+                },
+                "required": ["input_path", "output_dir"]
+            }
+        ),
+        Tool(
+            name="add_connectors",
+            description="""Add peg or hole snap-fit connectors to a model part.
+
+Best for: creating assembly joints between split parts.
+
+Pegs are solid protrusions added to one part. Holes are cavities in the matching
+part. Default 4mm diameter with 0.2mm clearance for reliable FDM printing.
+
+Example: "Add a peg connector to the top of this part at the center"
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "Absolute path to input STL file"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output STL path (optional, auto-generated if not provided)"
+                    },
+                    "connector_type": {
+                        "type": "string",
+                        "enum": ["peg", "hole"],
+                        "description": "Type of connector: 'peg' (protrusion) or 'hole' (cavity)"
+                    },
+                    "position": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "[x, y, z] center point for connector (default: center of top face)"
+                    },
+                    "direction": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "[nx, ny, nz] direction connector points (default: [0, 0, 1] = up)"
+                    },
+                    "diameter_mm": {
+                        "type": "number",
+                        "description": "Connector diameter in mm (default: 4.0)",
+                        "default": 4.0,
+                        "minimum": 2.0,
+                        "maximum": 10.0
+                    },
+                    "depth_mm": {
+                        "type": "number",
+                        "description": "Connector depth in mm (default: 5.0)",
+                        "default": 5.0,
+                        "minimum": 2.0,
+                        "maximum": 20.0
+                    },
+                    "clearance_mm": {
+                        "type": "number",
+                        "description": "Extra diameter for holes to ensure fit (default: 0.2mm)",
+                        "default": 0.2,
+                        "minimum": 0.1,
+                        "maximum": 1.0
+                    }
+                },
+                "required": ["input_path", "connector_type"]
+            }
+        ),
+        Tool(
+            name="analyze_split_points",
+            description="""Analyze model geometry and suggest optimal cut locations.
+
+Best for: finding natural break points in figurines before splitting.
+
+Scans cross-sectional area at various heights to find narrowest points (necks,
+waists, joints) where cuts will be cleanest and connectors most stable.
+
+Example: "Analyze this dragon model and suggest where to split it"
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "Absolute path to 3D model file"
+                    },
+                    "num_suggestions": {
+                        "type": "integer",
+                        "description": "Number of cut points to suggest (default: 3)",
+                        "default": 3,
+                        "minimum": 1,
+                        "maximum": 10
+                    }
+                },
+                "required": ["input_path"]
+            }
+        ),
+        Tool(
+            name="export_assembly_3mf",
+            description="""Combine multiple part files into a single 3MF assembly.
+
+Best for: packaging split parts for slicing together or sharing.
+
+Creates a 3MF file containing all parts, optionally arranged on the build plate.
+The 3MF format preserves part relationships and can be opened in OrcaSlicer.
+
+Example: "Package these 3 parts into an assembly.3mf file"
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "part_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of paths to STL/OBJ part files"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Path for output 3MF file"
+                    },
+                    "arrange": {
+                        "type": "boolean",
+                        "description": "Automatically arrange parts on build plate (default: true)",
+                        "default": True
+                    },
+                    "spacing_mm": {
+                        "type": "number",
+                        "description": "Spacing between arranged parts in mm (default: 10)",
+                        "default": 10,
+                        "minimum": 5,
+                        "maximum": 50
+                    }
+                },
+                "required": ["part_paths", "output_path"]
+            }
         )
     ]
+
+
+def generate_3d_prompt(concept: str, style: str = "stylized", view: str = "3/4 view", for_service: str = "any") -> str:
+    """Generate an optimized prompt for AI image generation targeting 3D conversion."""
+
+    # Style modifiers
+    style_modifiers = {
+        "realistic": "photorealistic, highly detailed, realistic proportions, realistic textures",
+        "stylized": "stylized 3D render, clean shapes, smooth surfaces, video game character style",
+        "cartoon": "3D cartoon style, bold shapes, smooth curves, Pixar-like, Disney-inspired",
+        "anime": "anime figure style, clean lines, cel-shaded look, figure collectible",
+        "miniature": "tabletop miniature, gaming figurine, detailed sculpt, paintable surface"
+    }
+
+    # View/angle modifiers
+    view_modifiers = {
+        "front": "front view, facing camera, symmetrical pose",
+        "3/4 view": "3/4 view angle, dynamic pose, showing depth",
+        "turnaround": "character turnaround sheet, multiple angles, T-pose reference",
+        "isometric": "isometric view, 45 degree angle, game asset style"
+    }
+
+    # Service-specific tips
+    service_tips = {
+        "meshy": "single subject, clear silhouette, no text or logos",
+        "tripo3d": "centered subject, simple pose, avoid thin or floating elements",
+        "any": "single centered subject, clear edges, no background clutter"
+    }
+
+    # Build the prompt
+    style_mod = style_modifiers.get(style, style_modifiers["stylized"])
+    view_mod = view_modifiers.get(view, view_modifiers["3/4 view"])
+    service_tip = service_tips.get(for_service, service_tips["any"])
+
+    prompt = f"""{concept}, {style_mod}, {view_mod},
+studio lighting, soft shadows, neutral gray background,
+full body visible, clean edges, high detail,
+octane render, unreal engine 5 quality,
+{service_tip},
+professional 3D model reference, product photography style"""
+
+    # Clean up whitespace
+    prompt = " ".join(prompt.split())
+
+    return prompt
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """Handle tool calls."""
 
-    if name == "image_to_stl_contour":
+    if name == "generate_3d_image_prompt":
+        concept = arguments["concept"]
+        style = arguments.get("style", "stylized")
+        view = arguments.get("view", "3/4 view")
+        for_service = arguments.get("for_service", "any")
+
+        prompt = generate_3d_prompt(concept, style, view, for_service)
+
+        result = f"""**Optimized Prompt for 3D Model Generation**
+
+**Your concept:** {concept}
+**Style:** {style}
+**View:** {view}
+**Target service:** {for_service}
+
+---
+
+**Generated prompt (copy this to your image generator):**
+
+```
+{prompt}
+```
+
+---
+
+**Tips for best results:**
+- Generate multiple images and pick the cleanest one
+- Avoid images with text, watermarks, or busy backgrounds
+- The subject should be fully visible (no cropping)
+- Simple poses convert better than complex action poses
+- After generating, use `fix_model` to auto-orient and scale for printing
+"""
+        return [TextContent(type="text", text=result)]
+
+    elif name == "image_to_stl_contour":
         try:
             output_path = arguments.get("output_path") or get_output_path(arguments["image_path"], "_contour")
             result = converters.image_to_stl_contour(
@@ -457,9 +773,10 @@ async def call_tool(name: str, arguments: dict):
                 input_path=arguments["input_path"],
                 output_path=output_path,
                 target_height_mm=arguments.get("target_height_mm", 80.0),
-                base_height_mm=arguments.get("base_height_mm", 2.0),
+                base_height_mm=arguments.get("base_height_mm", 0),
                 base_padding_mm=arguments.get("base_padding_mm", 3.0),
                 remove_floating=arguments.get("remove_floating", True),
+                auto_orient=arguments.get("auto_orient", True),
             )
             return [TextContent(type="text", text=format_fix_result(result))]
         except Exception as e:
@@ -487,6 +804,62 @@ async def call_tool(name: str, arguments: dict):
             return [TextContent(type="text", text=format_slice_result(result))]
         except Exception as e:
             return [TextContent(type="text", text=f"Error slicing STL: {e}")]
+
+    # Multi-part figurine tools
+    elif name == "split_model":
+        try:
+            output_dir = arguments.get("output_dir") or str(OUTPUT_DIR / "parts")
+            result = figurines.split_model(
+                input_path=arguments["input_path"],
+                output_dir=output_dir,
+                cut_heights_z=arguments.get("cut_heights_z"),
+                cut_planes=arguments.get("cut_planes"),
+            )
+            return [TextContent(type="text", text=format_split_result(result))]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error splitting model: {e}")]
+
+    elif name == "add_connectors":
+        try:
+            output_path = arguments.get("output_path") or get_output_path(
+                arguments["input_path"],
+                f"_{arguments['connector_type']}"
+            )
+            result = figurines.add_connector(
+                input_path=arguments["input_path"],
+                output_path=output_path,
+                connector_type=arguments["connector_type"],
+                position=arguments.get("position"),
+                direction=arguments.get("direction"),
+                diameter_mm=arguments.get("diameter_mm", 4.0),
+                depth_mm=arguments.get("depth_mm", 5.0),
+                clearance_mm=arguments.get("clearance_mm", 0.2),
+            )
+            return [TextContent(type="text", text=format_connector_result(result))]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error adding connector: {e}")]
+
+    elif name == "analyze_split_points":
+        try:
+            result = figurines.analyze_split_points(
+                input_path=arguments["input_path"],
+                num_suggestions=arguments.get("num_suggestions", 3),
+            )
+            return [TextContent(type="text", text=format_analysis_result(result))]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error analyzing model: {e}")]
+
+    elif name == "export_assembly_3mf":
+        try:
+            result = figurines.export_assembly_3mf(
+                part_paths=arguments["part_paths"],
+                output_path=arguments["output_path"],
+                arrange=arguments.get("arrange", True),
+                spacing_mm=arguments.get("spacing_mm", 10.0),
+            )
+            return [TextContent(type="text", text=format_assembly_result(result))]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error exporting assembly: {e}")]
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -614,6 +987,128 @@ def format_slice_result(result: dict) -> str:
 
 Ready to send to printer with `send_gcode_file`!
 """
+
+
+def format_split_result(result: dict) -> str:
+    """Format model split result for display."""
+    orig_dims = result.get("original_dimensions_mm", {})
+
+    output = f"""**Model Split Complete**
+
+**Input:** {result.get('input_path', 'N/A')}
+**Original Size:** {orig_dims.get('x', 0):.1f} x {orig_dims.get('y', 0):.1f} x {orig_dims.get('z', 0):.1f} mm
+**Parts Created:** {result.get('num_parts', 0)}
+
+**Parts:**
+"""
+    for part in result.get('parts', []):
+        dims = part.get('dimensions_mm', {})
+        watertight = 'Yes' if part.get('watertight') else 'No'
+        output += f"""
+**Part {part.get('part_number', 0)}:**
+- Output: {part.get('output_path', 'N/A')}
+- Size: {dims.get('x', 0):.1f} x {dims.get('y', 0):.1f} x {dims.get('z', 0):.1f} mm
+- Triangles: {part.get('triangles', 0):,}
+- Watertight: {watertight}
+"""
+
+    output += """
+**Next Steps:**
+1. Use `analyze_split_points` to find good connector locations
+2. Use `add_connectors` to add peg/hole connectors to each part
+3. Slice and print each part separately
+"""
+    return output
+
+
+def format_connector_result(result: dict) -> str:
+    """Format connector result for display."""
+    file_size_kb = result.get("file_size_bytes", 0) / 1024
+
+    return f"""**Connector Added**
+
+**Output:** {result.get('output_path', 'N/A')}
+**File Size:** {file_size_kb:.1f} KB
+
+**Connector Details:**
+- Type: {result.get('connector_type', 'N/A').upper()}
+- Diameter: {result.get('diameter_mm', 4.0):.1f}mm{' (+' + str(result.get('clearance_mm', 0)) + 'mm clearance)' if result.get('connector_type') == 'hole' else ''}
+- Depth: {result.get('depth_mm', 5.0):.1f}mm
+- Position: [{', '.join(f'{x:.1f}' for x in result.get('position', [0, 0, 0]))}]
+- Direction: [{', '.join(f'{x:.1f}' for x in result.get('direction', [0, 0, 1]))}]
+
+**Mesh Quality:**
+- Triangles: {result.get('triangles', 0):,}
+- Watertight: {'Yes' if result.get('watertight') else 'No'}
+
+**Tip:** For matching parts, use the same position but opposite connector type (peg/hole).
+"""
+
+
+def format_analysis_result(result: dict) -> str:
+    """Format split point analysis result for display."""
+    output = f"""**Split Point Analysis**
+
+**Model:** {result.get('input_path', 'N/A')}
+**Model Height:** {result.get('model_height_mm', 0):.1f}mm
+
+**Suggested Cut Points:** {result.get('num_suggestions', 0)}
+"""
+
+    for i, suggestion in enumerate(result.get('suggested_cuts', []), 1):
+        output += f"""
+**Cut {i}:** Z = {suggestion.get('height_from_bottom_mm', 0):.1f}mm ({suggestion.get('height_ratio', 0) * 100:.0f}% from bottom)
+- Cross-sectional area: {suggestion.get('area_mm2', 0):.1f}mm²
+- Narrowness score: {suggestion.get('score', 0):.2f} (higher = better)
+"""
+
+    output += """
+**Recommended Cut Heights:**
+"""
+    for height in result.get('recommended_cut_heights_z', []):
+        output += f"- {height:.1f}mm\n"
+
+    output += """
+**Resulting Parts:**
+"""
+    for part in result.get('resulting_parts', []):
+        output += f"- Part {part.get('part', 0)}: {part.get('height_mm', 0):.1f}mm (Z {part.get('start_z', 0):.1f} - {part.get('end_z', 0):.1f})\n"
+
+    output += """
+**Next Steps:**
+Use `split_model` with `cut_heights_z` parameter to split at these heights.
+"""
+    return output
+
+
+def format_assembly_result(result: dict) -> str:
+    """Format 3MF assembly result for display."""
+    file_size_kb = result.get("file_size_bytes", 0) / 1024
+    file_size_str = f"{file_size_kb:.1f} KB" if file_size_kb < 1024 else f"{file_size_kb/1024:.1f} MB"
+
+    output = f"""**3MF Assembly Created**
+
+**Output:** {result.get('output_path', 'N/A')}
+**File Size:** {file_size_str}
+**Parts Included:** {result.get('num_parts', 0)}
+**Arranged on Build Plate:** {'Yes' if result.get('arranged') else 'No'}
+"""
+
+    if result.get('fits_build_plate') is not None:
+        output += f"**Fits Build Volume:** {'Yes' if result.get('fits_build_plate') else 'No - needs manual rearrangement'}\n"
+
+    output += """
+**Parts:**
+"""
+    for part in result.get('parts', []):
+        dims = part.get('dimensions_mm', {})
+        output += f"- Part {part.get('part_number', 0)}: {dims.get('x', 0):.1f} x {dims.get('y', 0):.1f} x {dims.get('z', 0):.1f}mm\n"
+
+    output += """
+**Next Steps:**
+Open the .3mf file in OrcaSlicer to slice all parts together.
+"""
+    return output
 
 
 @server.list_resources()
